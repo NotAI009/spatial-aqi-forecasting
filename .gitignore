@@ -1,0 +1,21 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local experiment archives
+outputs_seq6_archive/
+outputs_seq6_archive_*/
+
+# TensorFlow / Keras artifacts
+checkpoint/
+checkpoints/
+*.h5
+*.keras
+
+# Jupyter / IDE
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
