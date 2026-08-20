@@ -1,9 +1,6 @@
 # Repository Navigation Guide
 
-**Dear Ma'am,**
-
-To help you seamlessly navigate the project files and gather all the necessary data and charts for the research paper, I have put together this quick navigation guide. It breaks down where the core code lives and exactly which outputs in the `outputs/` folder you can use for the manuscript.
-
+This guide breaks down where the core code lives and exactly which outputs in the `outputs/` folder should be used for manuscript writing.
 ---
 
 ## 1. Where to Find the Code & Methodology
