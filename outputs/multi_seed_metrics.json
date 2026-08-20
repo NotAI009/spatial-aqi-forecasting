@@ -1,0 +1,44 @@
+{
+  "selection_metric": "validation_MAE",
+  "seeds": [
+    {
+      "seed": 42,
+      "validation_MAE": 29.47466468811035,
+      "validation_RMSE": 39.75728988647461,
+      "test_MAE": 22.61954689025879,
+      "test_RMSE": 31.39753532409668
+    },
+    {
+      "seed": 123,
+      "validation_MAE": 27.24559211730957,
+      "validation_RMSE": 37.09559631347656,
+      "test_MAE": 21.784631729125977,
+      "test_RMSE": 29.815805435180664
+    },
+    {
+      "seed": 456,
+      "validation_MAE": 25.78941535949707,
+      "validation_RMSE": 33.729766845703125,
+      "test_MAE": 22.52484893798828,
+      "test_RMSE": 30.314453125
+    },
+    {
+      "seed": 789,
+      "validation_MAE": 28.684322357177734,
+      "validation_RMSE": 38.981224060058594,
+      "test_MAE": 25.565706253051758,
+      "test_RMSE": 33.48025131225586
+    },
+    {
+      "seed": 999,
+      "validation_MAE": 26.501981735229492,
+      "validation_RMSE": 36.213504791259766,
+      "test_MAE": 20.652868270874023,
+      "test_RMSE": 28.548484802246094
+    }
+  ],
+  "MAE_mean": 22.629520416259766,
+  "MAE_std": 1.8202495333928146,
+  "RMSE_mean": 30.711305999755858,
+  "RMSE_std": 1.8557463341574354
+}

@@ -161,31 +161,61 @@ def diebold_mariano_test(errors_model: np.ndarray, errors_baseline: np.ndarray,
         "interpretation": interpretation
     }
 
-def run_dm_tests(y_true_flat: np.ndarray, errors_dict: dict[str, np.ndarray], h: int = 1) -> pd.DataFrame:
+def run_dm_tests(y_true: np.ndarray, preds_dict: dict[str, np.ndarray], valid_mask: np.ndarray = None, h: int = 1) -> pd.DataFrame:
     """
     Batch runner for Diebold-Mariano tests against all baselines.
+    Properly aggregates spatial losses per time step to avoid inflating N.
     
     Args:
-        y_true_flat: 1D array of true values (included for interface completeness).
-        errors_dict: Dict mapping model_name -> 1D array of forecast errors.
+        y_true: Array of true values, shape (T, H, W, C) or (T, H, W).
+        preds_dict: Dict mapping model_name -> Array of predicted values, same shape as y_true.
                      Must include a 'ConvLSTM' key.
+        valid_mask: Boolean mask of shape (H, W) indicating valid spatial cells.
         h: Forecast horizon.
         
     Returns:
         DataFrame containing test results.
     """
-    if 'ConvLSTM' not in errors_dict:
-        raise ValueError("errors_dict must contain 'ConvLSTM'")
+    if 'ConvLSTM' not in preds_dict:
+        raise ValueError("preds_dict must contain 'ConvLSTM'")
         
-    conv_errors = errors_dict['ConvLSTM']
+    conv_preds = preds_dict['ConvLSTM']
     results = []
     
-    for base_name, base_errors in errors_dict.items():
+    # Helper to get sequence of monthly mean losses
+    def get_monthly_loss(true_arr, pred_arr, mask, l_type):
+        d = pred_arr - true_arr
+        if l_type == 'mse':
+            loss_grid = d ** 2
+        else:
+            loss_grid = np.abs(d)
+            
+        if mask is not None:
+            # For each time step, average the loss over valid cells
+            time_steps = len(true_arr)
+            monthly = np.zeros(time_steps)
+            for t in range(time_steps):
+                monthly[t] = np.mean(loss_grid[t][mask])
+            return monthly
+        else:
+            # Average over all spatial dims
+            axes = tuple(range(1, d.ndim))
+            return np.mean(loss_grid, axis=axes)
+    
+    for base_name, base_preds in preds_dict.items():
         if base_name == 'ConvLSTM':
             continue
             
         for loss_type in ['mse', 'mae']:
-            res = diebold_mariano_test(conv_errors, base_errors, loss=loss_type, h=h, method='hac')
+            # Calculate mean spatial loss for each time step
+            conv_loss = get_monthly_loss(y_true, conv_preds, valid_mask, loss_type)
+            base_loss = get_monthly_loss(y_true, base_preds, valid_mask, loss_type)
+            
+            # The differential is conv_loss - base_loss
+            # Pass it as custom loss to diebold_mariano_test
+            d_loss = conv_loss - base_loss
+            
+            res = diebold_mariano_test(d_loss, np.zeros_like(d_loss), loss='custom', h=h, method='hac')
             
             dm_stat = res['dm_statistic']
             p_val = res['p_value_two_sided']

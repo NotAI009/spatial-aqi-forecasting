@@ -1,6 +1,7 @@
 Baseline,n_months,loss_power,mean_loss_diff_model_minus_baseline,dm_t_statistic,p_value_two_sided,interpretation
-LinearTrend6M,12,2,-4175.485995665915,-2.486077470654567,0.030245449150242385,negative favors ConvLSTM; positive favors baseline
-TrainMean,12,2,-2249.1663576795004,-3.3451053763632537,0.006533995439133809,negative favors ConvLSTM; positive favors baseline
-Rolling3Mean,12,2,-1861.128907479039,-1.757644463551864,0.10656449304132873,negative favors ConvLSTM; positive favors baseline
-SeasonalMonthlyMean,12,2,-1477.465086962117,-1.9057854451278529,0.08313213297290399,negative favors ConvLSTM; positive favors baseline
-Persistence,12,2,-594.4873789255131,-1.2246842925870725,0.24627402221393313,negative favors ConvLSTM; positive favors baseline
+LinearTrend6M,12,2,-4242.325163320091,-2.5030820089288195,0.029345170360046233,negative favors ConvLSTM; positive favors baseline
+TrainMean,12,2,-2316.0055253336764,-3.132409708285149,0.009536590483160457,negative favors ConvLSTM; positive favors baseline
+Rolling3Mean,12,2,-1927.9680751332155,-1.8059887793209315,0.09832791940387353,negative favors ConvLSTM; positive favors baseline
+SeasonalMonthlyMean,12,2,-1544.304254616293,-2.305770940986288,0.0416072705809034,negative favors ConvLSTM; positive favors baseline
+Persistence,12,2,-661.3265465796893,-1.3820252020127604,0.1943836077590276,negative favors ConvLSTM; positive favors baseline
+SeasonalNaive,12,2,-92.79169330423285,-0.7578333718130071,0.46447679340832165,negative favors ConvLSTM; positive favors baseline

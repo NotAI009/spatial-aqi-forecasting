@@ -32,7 +32,7 @@ from evaluate import AQI_BREAKPOINTS, AQI_LABELS, AQI_COLORS, aqi_category, base
 from forecast import mc_dropout_forecast, multi_step_forecast
 from model import build_convlstm
 from train import augment_training_data, inverse_scale, scale_data, train_model, transform_with_scaler
-from baselines import run_sarima_baseline, run_vanilla_lstm_baseline
+from baselines import run_sarima_baseline, run_vanilla_lstm_baseline, run_seasonal_naive_baseline
 from ablation import run_ablation_study
 from dm_test import run_dm_tests, fig_dm_results
 from ts_crossval import run_time_series_cv, summarize_cv_results, fig18_tscv_folds
@@ -775,6 +775,10 @@ def rolling_origin_baselines(df: pd.DataFrame, seq_len: int, min_train_months: i
             "Rolling3Mean": last_window[-3:].mean(axis=0),
             "TrainMean": history.mean(axis=0),
         }
+        if target_idx >= 12:
+            preds["SeasonalNaive"] = values[target_idx - 12]
+        else:
+            preds["SeasonalNaive"] = values[0]
         month_hist = df.iloc[:target_idx]
         month_mean = month_hist[month_hist.index.month == date.month].mean().reindex(cities)
         preds["SeasonalMonthlyMean"] = month_mean.fillna(month_hist.mean()).to_numpy(dtype=np.float32)
@@ -999,6 +1003,9 @@ def run_journal_diagnostics(
     baseline_frames["SeasonalMonthlyMean"] = matrix_to_frames(
         seasonal_vals, city_order, city_positions, y_test_real.shape
     )
+    baseline_frames["SeasonalNaive"] = run_seasonal_naive_baseline(
+        df, test_dates, city_positions, y_test_real.shape[1:3]
+    )
 
     rows = []
     baseline_longs = {}
@@ -1111,8 +1118,8 @@ def write_research_brief(
                     "Proper Diebold-Mariano test vs persistence using MAE loss: "
                     f"HLN-adjusted statistic = {persist_proper['DM_HLN_Statistic']:.3f}, "
                     f"p = {persist_proper['P_Value_HLN']:.4f}. "
-                    "The 5% significance result supports a statistically meaningful "
-                    "ConvLSTM improvement over persistence."
+                    "This result is reported descriptively; statistical significance is "
+                    "not claimed from the 12-month holdout."
                 )
             else:
                 dm_line = "Proper persistence DM comparison was not available."
@@ -1482,54 +1489,125 @@ def run_experiment(
         X_train_s_orig = X_train_s
         y_train_s_orig = y_train_s
 
-    # ── 6. Build model ─────────────────────────────────────────────────────
+    # ── 6. & 7. Multi-Seed Training ────────────────────────────────────────
     print("\n" + "=" * 60)
-    print(" STEP 6 — Model definition")
+    print(" STEP 6 & 7 — Multi-Seed Model Training")
     print("=" * 60)
-    model = build_convlstm(
-        input_shape=(seq_len, frames.shape[1], frames.shape[2], 1),
-        valid_mask=valid_mask,
-        learning_rate=8e-4,
-    )
-    model.summary()
-    with (output_dir / "model_summary.txt").open("w", encoding="utf-8") as fh:
-        model.summary(print_fn=lambda line: fh.write(line + "\n"))
+    
+    n_seeds = 5 if run_journal else 1
+    seed_metrics = []
+    best_model = None
+    best_mae = float('inf')
+    best_pred_test_s = None
+    best_baseline_pred_s = None
+    best_pred_test_real = None
+    best_baseline_real = None
+    best_conv_metrics = None
+    
+    for seed_idx, seed in enumerate([42, 123, 456, 789, 999][:n_seeds]):
+        print(f"\n  --- Training Seed {seed} ({seed_idx+1}/{n_seeds}) ---")
+        tf.random.set_seed(seed)
+        np.random.seed(seed)
+        
+        # Build
+        model = build_convlstm(
+            input_shape=(seq_len, frames.shape[1], frames.shape[2], 1),
+            valid_mask=valid_mask,
+            learning_rate=8e-4,
+        )
+        if seed_idx == 0:
+            with (output_dir / "model_summary.txt").open("w", encoding="utf-8") as fh:
+                model.summary(print_fn=lambda line: fh.write(line + "\n"))
+                
+        # Train
+        ckpt_path = str(output_dir / f"best_weights_seed_{seed}.keras")
+        history = train_model(
+            model, X_train_s, y_train_s, X_val_s, y_val_s,
+            epochs=epochs, batch_size=batch_size,
+            checkpoint_path=ckpt_path,
+        )
+        if seed_idx == 0:
+            fig04_loss_curve(history, output_dir / "04_loss_curves.png", show_plots)
+            
+        # Select the final seed using validation data only. The test set remains
+        # untouched until the selected model is evaluated below.
+        val_pred_s = model.predict(X_val_s, verbose=0).astype(np.float32)
+        val_pred_s[..., 0] = np.where(valid_mask[np.newaxis], val_pred_s[..., 0], 0.0)
+        y_val_real = inverse_scale(y_val_s, scaler)
+        val_pred_real = inverse_scale(val_pred_s, scaler)
+        for arr in (y_val_real, val_pred_real):
+            arr[..., 0] = np.where(valid_mask[np.newaxis], arr[..., 0], np.nan)
+        val_metrics = compute_metrics(y_val_real, val_pred_real, valid_mask)
 
-    # ── 7. Train ───────────────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print(" STEP 7 — Training")
-    print("=" * 60)
-    ckpt_path = str(output_dir / "best_weights.keras")
-    history = train_model(
-        model, X_train_s, y_train_s, X_val_s, y_val_s,
-        epochs=epochs, batch_size=batch_size,
-        checkpoint_path=ckpt_path,
-    )
-    fig04_loss_curve(history, output_dir / "04_loss_curves.png", show_plots)
+        # Evaluate the held-out test set for reporting, but do not use it for
+        # model selection.
+        baseline_pred_s = baseline_persistence(X_test_s).astype(np.float32)
+        pred_test_s     = model.predict(X_test_s, verbose=0).astype(np.float32)
+        
+        for arr in (baseline_pred_s, pred_test_s, y_test_s):
+            arr[..., 0] = np.where(valid_mask[np.newaxis], arr[..., 0], 0.0)
+            
+        y_test_real    = inverse_scale(y_test_s, scaler)
+        baseline_real  = inverse_scale(baseline_pred_s, scaler)
+        pred_test_real = inverse_scale(pred_test_s, scaler)
+        
+        for arr in (y_test_real, baseline_real, pred_test_real):
+            arr[..., 0] = np.where(valid_mask[np.newaxis], arr[..., 0], np.nan)
+            
+        c_metrics = compute_metrics(y_test_real, pred_test_real, valid_mask)
+        seed_metrics.append({
+            "seed": seed,
+            "validation_MAE": val_metrics["MAE"],
+            "validation_RMSE": val_metrics["RMSE"],
+            "test_MAE": c_metrics["MAE"],
+            "test_RMSE": c_metrics["RMSE"],
+        })
+        print(f"  Seed {seed} validation MAE: {val_metrics['MAE']:.3f}; test MAE: {c_metrics['MAE']:.3f}")
+        
+        if val_metrics["MAE"] < best_mae:
+            best_mae = val_metrics["MAE"]
+            best_model = model
+            best_pred_test_s = pred_test_s
+            best_baseline_pred_s = baseline_pred_s
+            best_pred_test_real = pred_test_real
+            best_baseline_real = baseline_real
+            best_conv_metrics = c_metrics
+
+    # Multi-seed stats
+    print("\n  ── Multi-Seed Metrics ────────────────────────────────")
+    maes = [m['test_MAE'] for m in seed_metrics]
+    rmses = [m['test_RMSE'] for m in seed_metrics]
+    print(f"  MAE:  {np.mean(maes):.3f} ± {np.std(maes):.3f}")
+    print(f"  RMSE: {np.mean(rmses):.3f} ± {np.std(rmses):.3f}")
+    
+    with (output_dir / "multi_seed_metrics.json").open("w", encoding="utf-8") as f:
+        json.dump({
+            "selection_metric": "validation_MAE",
+            "seeds": seed_metrics,
+            "MAE_mean": float(np.mean(maes)),
+            "MAE_std": float(np.std(maes, ddof=1)),
+            "RMSE_mean": float(np.mean(rmses)),
+            "RMSE_std": float(np.std(rmses, ddof=1)),
+        }, f, indent=2)
+
+    # Use the best model for downstream analysis
+    model = best_model
+    pred_test_s = best_pred_test_s
+    baseline_pred_s = best_baseline_pred_s
+    pred_test_real = best_pred_test_real
+    baseline_real = best_baseline_real
+    conv_metrics = best_conv_metrics
+
     model.save(output_dir / "convlstm_aqi_model.keras")
-    print(f"  Model saved → {output_dir / 'convlstm_aqi_model.keras'}")
-
+    print(f"\n  Best model saved → {output_dir / 'convlstm_aqi_model.keras'}")
+    
     # ── 8. Evaluate ────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print(" STEP 8 — Evaluation on test set")
+    print(" STEP 8 — Evaluation on test set (Using best seed)")
     print("=" * 60)
-
-    baseline_pred_s = baseline_persistence(X_test_s).astype(np.float32)
-    pred_test_s     = model.predict(X_test_s, verbose=0).astype(np.float32)
-
-    # Zero-out invalid cells in scaled predictions
-    for arr in (baseline_pred_s, pred_test_s, y_test_s):
-        arr[..., 0] = np.where(valid_mask[np.newaxis], arr[..., 0], 0.0)
-
-    y_test_real    = inverse_scale(y_test_s, scaler)
-    baseline_real  = inverse_scale(baseline_pred_s, scaler)
-    pred_test_real = inverse_scale(pred_test_s, scaler)
-    for arr in (y_test_real, baseline_real, pred_test_real):
-        arr[..., 0] = np.where(valid_mask[np.newaxis], arr[..., 0], np.nan)
-
+    
     base_metrics = compute_metrics(y_test_real, baseline_real, valid_mask)
-    conv_metrics = compute_metrics(y_test_real, pred_test_real, valid_mask)
-
+    
     metrics_df = pd.DataFrame([
         {"Model": "Baseline (Persistence)", **{k: v for k, v in base_metrics.items() if not k.endswith("_values")}},
         {"Model": "ConvLSTM",              **{k: v for k, v in conv_metrics.items() if not k.endswith("_values")}},
@@ -1695,17 +1773,16 @@ def run_experiment(
         print("\n" + "=" * 60)
         print(" STEP 13 — Proper Diebold-Mariano tests (HAC + HLN correction)")
         print("=" * 60)
-        true_flat = flatten_valid_cells(y_test_real, valid_mask)
-        errors_dict = {
-            "ConvLSTM": flatten_valid_cells(pred_test_real, valid_mask) - true_flat,
-            "Persistence": flatten_valid_cells(baseline_real, valid_mask) - true_flat,
+        preds_dict = {
+            "ConvLSTM": pred_test_real,
+            "Persistence": baseline_real,
         }
         if sarima_results is not None:
-            errors_dict["SARIMA"] = flatten_valid_cells(sarima_results["predictions"], valid_mask) - true_flat
+            preds_dict["SARIMA"] = sarima_results["predictions"]
         if lstm_results is not None:
-            errors_dict["Vanilla LSTM"] = flatten_valid_cells(lstm_results["predictions"], valid_mask) - true_flat
+            preds_dict["Vanilla LSTM"] = lstm_results["predictions"]
 
-        dm_proper_df = run_dm_tests(true_flat, errors_dict, h=1)
+        dm_proper_df = run_dm_tests(y_test_real, preds_dict, valid_mask=valid_mask, h=1)
         dm_proper_df.to_csv(output_dir / "dm_test_proper.csv", index=False)
         fig_dm_results(dm_proper_df, str(output_dir / "21_dm_test_proper.png"), show_plots)
         print(dm_proper_df[["Baseline", "Loss_Type", "DM_HLN_Statistic", "P_Value_HLN", "Significant_5pct"]].to_string(index=False))
@@ -1850,7 +1927,7 @@ def main():
         show_plots=not args.no_show_plots,
         mc_passes=args.mc_passes,
         run_journal=not args.skip_journal_diagnostics,
-        run_tscv=args.run_tscv,
+        run_tscv=(not args.skip_journal_diagnostics) or args.run_tscv,
         min_cv_train_months=args.min_cv_train_months,
     )
 

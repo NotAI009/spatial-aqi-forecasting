@@ -144,7 +144,7 @@ def run_time_series_cv(
                     preds = res_full.predict(start=train_end, end=test_end-1, dynamic=False)
                     
                     for test_step in range(len(X_test)):
-                        sarima_pred_frame[test_step, r, c, 0] = preds[train_end + test_step]
+                        sarima_pred_frame[test_step, r, c, 0] = float(preds.iloc[test_step])
                 except Exception:
                     # Fallback to persistence if SARIMA fails to converge or errors
                     for test_step in range(len(X_test)):
@@ -222,7 +222,7 @@ def fig18_tscv_folds(cv_df: pd.DataFrame, path: str, show: bool = False):
     bplot = ax2.boxplot(
         plot_data, 
         patch_artist=True, 
-        labels=models,
+        tick_labels=models,
         medianprops=dict(color="black")
     )
     

@@ -256,3 +256,32 @@ def run_vanilla_lstm_baseline(
     predictions = predictions_to_grid_frames(city_predictions, city_positions, T, grid_shape)
 
     return predictions, histories
+
+def run_seasonal_naive_baseline(
+    full_df: pd.DataFrame,
+    test_dates: pd.DatetimeIndex | list,
+    city_positions: dict[str, tuple[int, int]],
+    grid_shape: tuple[int, int],
+    seasonal_period: int = 12,
+) -> np.ndarray:
+    """
+    Run Seasonal Naive baseline.
+    
+    Predicts the value from exactly `seasonal_period` steps ago.
+    """
+    H, W = grid_shape
+    T = len(test_dates)
+    predictions = np.full((T, H, W, 1), 0.0, dtype=np.float32)
+    
+    for city, (r, c) in city_positions.items():
+        city_series = full_df[city]
+        preds = []
+        for t in test_dates:
+            target_idx = city_series.index.get_loc(t)
+            if target_idx >= seasonal_period:
+                preds.append(city_series.iloc[target_idx - seasonal_period])
+            else:
+                preds.append(city_series.iloc[0]) # Fallback if not enough history
+        predictions[:, r, c, 0] = preds
+
+    return predictions
